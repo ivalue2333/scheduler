@@ -25,8 +25,9 @@ func main() {
 	})
 	g.UseDB(gormDB) // reuse your gorm db
 
-	g.ApplyInterface(func(method method.InstanceMethod) {}, g.GenerateModel("scheduler_instance"))
-	g.ApplyInterface(func(method method.TaskMethod) {}, g.GenerateModel("scheduler_task"))
+	g.ApplyInterface(func(m method.InstanceMethod) {}, g.GenerateModel("scheduler_instance"))
+	g.ApplyInterface(func(m method.TaskMethod) {}, g.GenerateModel("scheduler_task"))
+	g.ApplyInterface(func(m method.LockerMethod) {}, g.GenerateModel("scheduler_locker"))
 
 	// Generate the code.
 	g.Execute()

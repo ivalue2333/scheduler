@@ -29,6 +29,7 @@ func newSchedulerTask(db *gorm.DB, opts ...gen.DOOption) schedulerTask {
 	tableName := _schedulerTask.schedulerTaskDo.TableName()
 	_schedulerTask.ALL = field.NewAsterisk(tableName)
 	_schedulerTask.ID = field.NewInt64(tableName, "id")
+	_schedulerTask.InstanceID = field.NewInt64(tableName, "instance_id")
 	_schedulerTask.Name = field.NewString(tableName, "name")
 	_schedulerTask.Namespace = field.NewString(tableName, "namespace")
 	_schedulerTask.Category = field.NewString(tableName, "category")
@@ -47,16 +48,17 @@ func newSchedulerTask(db *gorm.DB, opts ...gen.DOOption) schedulerTask {
 type schedulerTask struct {
 	schedulerTaskDo
 
-	ALL       field.Asterisk
-	ID        field.Int64  // 主键
-	Name      field.String // 任务名,绑定执行器
-	Namespace field.String // 实例空间
-	Category  field.String // 实例空间分类
-	Priority  field.Int32  // 任务优先级, 1 - 100, 1:数值越小,优先级越高
-	Status    field.Int32  // 状态; 1:等待中,2:执行中,3:暂停,4:停止,5:成功,6:过期
-	Extra     field.String // 业务数据
-	CreatedAt field.Time   // 创建时间
-	UpdatedAt field.Time   // 更新时间
+	ALL        field.Asterisk
+	ID         field.Int64  // 主键
+	InstanceID field.Int64  // 执行实例
+	Name       field.String // 任务名,绑定执行器
+	Namespace  field.String // 实例空间,c0
+	Category   field.String // 实例空间分类,c1,推荐拼接
+	Priority   field.Int32  // 任务优先级, 1 - 100, 1:数值越小,优先级越高
+	Status     field.Int32  // 状态; 1:等待中,2:执行中,3:暂停,4:停止,5:成功,6:过期
+	Extra      field.String // 业务数据
+	CreatedAt  field.Time   // 创建时间
+	UpdatedAt  field.Time   // 更新时间
 
 	fieldMap map[string]field.Expr
 }
@@ -74,6 +76,7 @@ func (s schedulerTask) As(alias string) *schedulerTask {
 func (s *schedulerTask) updateTableName(table string) *schedulerTask {
 	s.ALL = field.NewAsterisk(table)
 	s.ID = field.NewInt64(table, "id")
+	s.InstanceID = field.NewInt64(table, "instance_id")
 	s.Name = field.NewString(table, "name")
 	s.Namespace = field.NewString(table, "namespace")
 	s.Category = field.NewString(table, "category")
@@ -98,8 +101,9 @@ func (s *schedulerTask) GetFieldByName(fieldName string) (field.OrderExpr, bool)
 }
 
 func (s *schedulerTask) fillFieldMap() {
-	s.fieldMap = make(map[string]field.Expr, 9)
+	s.fieldMap = make(map[string]field.Expr, 10)
 	s.fieldMap["id"] = s.ID
+	s.fieldMap["instance_id"] = s.InstanceID
 	s.fieldMap["name"] = s.Name
 	s.fieldMap["namespace"] = s.Namespace
 	s.fieldMap["category"] = s.Category
@@ -182,25 +186,95 @@ type ISchedulerTaskDo interface {
 	UnderlyingDB() *gorm.DB
 	schema.Tabler
 
-	UpdateStatus(id int64, oldStatus int32, status int32) (rowsAffected int64, err error)
+	UpdateStatus(ids []int64, instanceID int64, oldStatus int32, status int32) (rowsAffected int64, err error)
+	PurgeInstanceTask(ids []int64, instanceID int64) (rowsAffected int64, err error)
+	ListWaittingTasks(namespace string, category string, instanceID int64, id int64) (result []*rdm.SchedulerTask, err error)
+	ListInstanceRunningTasks(id int64, instanceID int64) (result []*rdm.SchedulerTask, err error)
 }
 
 // update @@table
 //
 //	set status = @status
-//	where id = @id and status = @oldStatus
-func (s schedulerTaskDo) UpdateStatus(id int64, oldStatus int32, status int32) (rowsAffected int64, err error) {
+//	where id in @ids and status = @oldStatus and instance_id = @instanceID
+func (s schedulerTaskDo) UpdateStatus(ids []int64, instanceID int64, oldStatus int32, status int32) (rowsAffected int64, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, status)
-	params = append(params, id)
+	params = append(params, ids)
 	params = append(params, oldStatus)
-	generateSQL.WriteString("update scheduler_task set status = ? where id = ? and status = ? ")
+	params = append(params, instanceID)
+	generateSQL.WriteString("update scheduler_task set status = ? where id in ? and status = ? and instance_id = ? ")
 
 	var executeSQL *gorm.DB
 	executeSQL = s.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
 	rowsAffected = executeSQL.RowsAffected
+	err = executeSQL.Error
+
+	return
+}
+
+// update @@table
+//
+//	set status = 1, instance_id = 0
+//	where id in @ids
+//	and instance_id = @instanceID
+//	and status = 2
+func (s schedulerTaskDo) PurgeInstanceTask(ids []int64, instanceID int64) (rowsAffected int64, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, ids)
+	params = append(params, instanceID)
+	generateSQL.WriteString("update scheduler_task set status = 1, instance_id = 0 where id in ? and instance_id = ? and status = 2 ")
+
+	var executeSQL *gorm.DB
+	executeSQL = s.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	rowsAffected = executeSQL.RowsAffected
+	err = executeSQL.Error
+
+	return
+}
+
+// select * from @@table
+//
+//	where namespace = @namespace
+//	and category = @category
+//	and status = 1
+//	and instance_id in (@instanceID, 0)
+//	and id > @id
+//	order by id limit 20
+func (s schedulerTaskDo) ListWaittingTasks(namespace string, category string, instanceID int64, id int64) (result []*rdm.SchedulerTask, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, namespace)
+	params = append(params, category)
+	params = append(params, instanceID)
+	params = append(params, id)
+	generateSQL.WriteString("select * from scheduler_task where namespace = ? and category = ? and status = 1 and instance_id in (?, 0) and id > ? order by id limit 20 ")
+
+	var executeSQL *gorm.DB
+	executeSQL = s.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// select * from @@table
+//
+//	where instance_id = @instanceID
+//	and status = 2
+//	and id > @id
+//	order by id limit 20
+//
+// todo order by id 是否OK
+func (s schedulerTaskDo) ListInstanceRunningTasks(id int64, instanceID int64) (result []*rdm.SchedulerTask, err error) {
+	var generateSQL strings.Builder
+	generateSQL.WriteString("todo order by id 是否OK ")
+
+	var executeSQL *gorm.DB
+	executeSQL = s.UnderlyingDB().Raw(generateSQL.String()).Find(&result) // ignore_security_alert
 	err = executeSQL.Error
 
 	return

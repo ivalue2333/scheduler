@@ -6,15 +6,12 @@ import (
 	"github.com/ivalue2333/scheduler/dal/rdm"
 )
 
-type Option interface {
-	Apply(scheduler *Scheduler) error
-}
-
-type ConfigOption struct {
-}
-
-func (c *ConfigOption) Apply(s *Scheduler) error {
-	return nil
+func TaskLess(iv, jv *rdm.SchedulerTask) bool {
+	return iv.Priority >= jv.Priority
 }
 
 type TaskFunc func(ctx context.Context, task *rdm.SchedulerTask) error
+
+type Option interface {
+	Apply(scheduler *Scheduler) error
+}

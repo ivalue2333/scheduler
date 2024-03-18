@@ -161,22 +161,75 @@ type ISchedulerInstanceDo interface {
 	schema.Tabler
 
 	DoHeartBeat(id int64, heartBeatAt time.Time) (rowsAffected int64, err error)
+	PurgeInstance(id int64) (rowsAffected int64, err error)
+	GetInstance(id int64) (result *rdm.SchedulerInstance, err error)
+	ListOfflineInstances(id int64, oldestHeartBeatAt time.Time) (result []*rdm.SchedulerInstance, err error)
 }
 
 // update @@table
 //
-//	where id = @id heart_beat_at=@heartBeatAt
+//	set heart_beat_at = @heartBeatAt
+//	where id = @id
 func (s schedulerInstanceDo) DoHeartBeat(id int64, heartBeatAt time.Time) (rowsAffected int64, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
-	params = append(params, id)
 	params = append(params, heartBeatAt)
-	generateSQL.WriteString("update scheduler_instance where id = ? heart_beat_at=? ")
+	params = append(params, id)
+	generateSQL.WriteString("update scheduler_instance set heart_beat_at = ? where id = ? ")
 
 	var executeSQL *gorm.DB
 	executeSQL = s.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
 	rowsAffected = executeSQL.RowsAffected
+	err = executeSQL.Error
+
+	return
+}
+
+// delete from @@table where id = @id
+func (s schedulerInstanceDo) PurgeInstance(id int64) (rowsAffected int64, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, id)
+	generateSQL.WriteString("delete from scheduler_instance where id = ? ")
+
+	var executeSQL *gorm.DB
+	executeSQL = s.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	rowsAffected = executeSQL.RowsAffected
+	err = executeSQL.Error
+
+	return
+}
+
+// select * from @@table
+//
+//	where id = id limit 1
+func (s schedulerInstanceDo) GetInstance(id int64) (result *rdm.SchedulerInstance, err error) {
+	var generateSQL strings.Builder
+	generateSQL.WriteString("select * from scheduler_instance where id = id limit 1 ")
+
+	var executeSQL *gorm.DB
+	executeSQL = s.UnderlyingDB().Raw(generateSQL.String()).Take(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// select * from @@table
+//
+//	where id > @id and heart_beat_at < @oldestHeartBeatAt
+//	order by id limit 20
+func (s schedulerInstanceDo) ListOfflineInstances(id int64, oldestHeartBeatAt time.Time) (result []*rdm.SchedulerInstance, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, id)
+	params = append(params, oldestHeartBeatAt)
+	generateSQL.WriteString("select * from scheduler_instance where id > ? and heart_beat_at < ? order by id limit 20 ")
+
+	var executeSQL *gorm.DB
+	executeSQL = s.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
 	err = executeSQL.Error
 
 	return

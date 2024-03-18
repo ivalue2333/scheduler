@@ -18,12 +18,14 @@ import (
 var (
 	Q                 = new(Query)
 	SchedulerInstance *schedulerInstance
+	SchedulerLocker   *schedulerLocker
 	SchedulerTask     *schedulerTask
 )
 
 func SetDefault(db *gorm.DB, opts ...gen.DOOption) {
 	*Q = *Use(db, opts...)
 	SchedulerInstance = &Q.SchedulerInstance
+	SchedulerLocker = &Q.SchedulerLocker
 	SchedulerTask = &Q.SchedulerTask
 }
 
@@ -31,6 +33,7 @@ func Use(db *gorm.DB, opts ...gen.DOOption) *Query {
 	return &Query{
 		db:                db,
 		SchedulerInstance: newSchedulerInstance(db, opts...),
+		SchedulerLocker:   newSchedulerLocker(db, opts...),
 		SchedulerTask:     newSchedulerTask(db, opts...),
 	}
 }
@@ -39,6 +42,7 @@ type Query struct {
 	db *gorm.DB
 
 	SchedulerInstance schedulerInstance
+	SchedulerLocker   schedulerLocker
 	SchedulerTask     schedulerTask
 }
 
@@ -48,6 +52,7 @@ func (q *Query) clone(db *gorm.DB) *Query {
 	return &Query{
 		db:                db,
 		SchedulerInstance: q.SchedulerInstance.clone(db),
+		SchedulerLocker:   q.SchedulerLocker.clone(db),
 		SchedulerTask:     q.SchedulerTask.clone(db),
 	}
 }
@@ -64,18 +69,21 @@ func (q *Query) ReplaceDB(db *gorm.DB) *Query {
 	return &Query{
 		db:                db,
 		SchedulerInstance: q.SchedulerInstance.replaceDB(db),
+		SchedulerLocker:   q.SchedulerLocker.replaceDB(db),
 		SchedulerTask:     q.SchedulerTask.replaceDB(db),
 	}
 }
 
 type queryCtx struct {
 	SchedulerInstance ISchedulerInstanceDo
+	SchedulerLocker   ISchedulerLockerDo
 	SchedulerTask     ISchedulerTaskDo
 }
 
 func (q *Query) WithContext(ctx context.Context) *queryCtx {
 	return &queryCtx{
 		SchedulerInstance: q.SchedulerInstance.WithContext(ctx),
+		SchedulerLocker:   q.SchedulerLocker.WithContext(ctx),
 		SchedulerTask:     q.SchedulerTask.WithContext(ctx),
 	}
 }
